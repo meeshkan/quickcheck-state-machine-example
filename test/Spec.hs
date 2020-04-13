@@ -132,12 +132,15 @@ semantics fname AskLength = do
         return (TellLength (length split))
 
 ---------------------------------
--- mock is the logic of the model
+-- mock is a mock of the logic of the model
+-- it is used to document how the model works
+-- but is not currently functional, so it can output
+-- any values
 
 mock :: Model Symbolic -> Command Symbolic -> GenSym (Response Symbolic)
 mock _ (Push _) = pure Pushed
-mock (Model m) Pop = pure $ Popped (if null m then Nothing else Just $ last m)
-mock (Model m) AskLength = pure $ TellLength $ length m
+mock _ Pop = pure $ Popped Nothing
+mock _ AskLength = pure $ TellLength 0
 
 sm :: String -> StateMachine Model Command IO Response
 sm s = StateMachine initModel transition precondition postcondition
