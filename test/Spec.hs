@@ -165,4 +165,6 @@ prop_sequential = forAllCommands (sm "") Nothing $ \cmds -> monadicIO $ do
   prettyCommands sm' hist (checkCommandNames cmds (res === Ok))
 
 main :: IO ()
-main = quickCheck prop_sequential
+main = do
+    createDirectoryIfMissing False "queues"
+    quickCheck prop_sequential
