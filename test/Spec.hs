@@ -142,9 +142,12 @@ mock _ (Push _) = pure Pushed
 mock _ Pop = pure $ Popped Nothing
 mock _ AskLength = pure $ TellLength 0
 
+cleanup :: model Concrete -> IO ()
+cleanup _ = return ()
+
 sm :: String -> StateMachine Model Command IO Response
 sm s = StateMachine initModel transition precondition postcondition
-      Nothing generator shrinker (semantics s) mock noCleanup
+      invariant generator shrinker (semantics s) mock cleanup
 
 newRand = randomIO :: IO Int
 
