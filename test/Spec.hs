@@ -7,7 +7,7 @@
 
 import Data.Maybe
 import System.Directory
-import System.Random
+import System.Random.PCG.Unique(create, uniform)
 import Data.Kind(Type)
 import Data.Functor.Classes(Eq1)
 import Test.QuickCheck(Arbitrary(arbitrary), Gen, oneof, shrink, quickCheck, withMaxSuccess, Property, (===))
@@ -18,6 +18,38 @@ import qualified Test.StateMachine.Types.Rank2 as Rank2
 import System.IO
 import Data.List
 import Data.List.Split
+
+--------------------------
+-- the system under test
+pushToQueue :: String -> Int -> IO ()
+pushToQueue fname x = do
+    fe <- doesFileExist fname
+    if (not fe) then do
+            withFile fname WriteMode $ \handle -> hPutStr handle $ show x -- write the number
+        else do
+            txt <- withFile fname ReadMode $ \handle -> hGetLine handle
+            let split = splitOn ":" txt
+            withFile fname WriteMode $ \handle -> hPutStr handle $ intercalate ":" (show x : split) -- append the number to the beginning of the string
+
+popFromQueue :: String -> IO (Maybe Int)
+popFromQueue fname = do
+    fe <- doesFileExist fname
+    if (not fe) then return $ Nothing else do
+        txt <- withFile fname ReadMode $ \handle -> hGetLine handle
+        let split = splitOn ":" txt
+        if (length split == 1) then
+                removeFile fname -- remove the file if queue is empty
+            else
+                withFile fname WriteMode $ \handle -> hPutStr handle $ intercalate ":" $ init split -- remove the last element
+        return $ if null split then Nothing else Just (read (last split) :: Int)
+
+lengthQueue :: String -> IO Int
+lengthQueue fname = do
+    fe <- doesFileExist fname
+    if (not fe) then return 0 else do
+        txt <- withFile fname ReadMode $ \handle -> hGetLine handle
+        let split = splitOn ":" txt
+        return $ length split
 
 --------------------------
 --- the model
@@ -93,8 +125,9 @@ generator _ = Just $ oneof [(pure Pop), (Push <$> arbitrary), (pure AskLength)]
 
 ----------------------------------------------
 -- the shrinker specifies how to hone in on problematic actions
--- here, the only thing we need to shrink is the
--- number going into push
+-- here, the only thing we  shrink is the
+-- number going into push because we want to test if a specific range
+-- of numbers would provoke a crash
 -- everything else doesn't need shrinking
 
 shrinker :: Model Symbolic -> Command Symbolic -> [Command Symbolic]
@@ -108,28 +141,14 @@ shrinker _ _             = []
 
 semantics :: String -> Command Concrete -> IO (Response Concrete)
 semantics fname (Push x) = do
-    fe <- doesFileExist fname
-    if (not fe) then do
-            withFile fname WriteMode $ \handle -> hPutStr handle $ show x
-            return Pushed
-        else do
-            txt <- withFile fname ReadMode $ \handle -> hGetLine handle
-            let split = splitOn ":" txt
-            withFile fname WriteMode $ \handle -> hPutStr handle $ intercalate ":" (show x : split)
-            return Pushed
+    pushToQueue fname x
+    return Pushed
 semantics fname Pop = do
-    fe <- doesFileExist fname
-    if (not fe) then return $ Popped Nothing else do
-        txt <- withFile fname ReadMode $ \handle -> hGetLine handle
-        let split = splitOn ":" txt
-        if (length split == 1) then removeFile fname else withFile fname WriteMode $ \handle -> hPutStr handle $ intercalate ":" $ init split
-        return (Popped (if null split then Nothing else Just (read (last split) :: Int)))
+    val <- popFromQueue fname
+    return $ Popped val
 semantics fname AskLength = do
-    fe <- doesFileExist fname
-    if (not fe) then return $ TellLength 0 else do
-        txt <- withFile fname ReadMode $ \handle -> hGetLine handle
-        let split = splitOn ":" txt
-        return (TellLength (length split))
+    val <- lengthQueue fname
+    return $ TellLength val
 
 ---------------------------------
 -- mock is a mock of the logic of the model
@@ -149,10 +168,14 @@ sm :: String -> StateMachine Model Command IO Response
 sm s = StateMachine initModel transition precondition postcondition
       invariant generator shrinker (semantics s) mock cleanup
 
-newRand = randomIO :: IO Int
+newRand :: IO Int
+newRand = do
+  g <- create
+  i <- uniform g
+  return i
 
-prop_sequential :: Property
-prop_sequential = forAllCommands (sm "") Nothing $ \cmds -> monadicIO $ do
+state_machine_properties :: Property
+state_machine_properties = forAllCommands (sm "") Nothing $ \cmds -> monadicIO $ do
   id <- run newRand
   let fname = "queues/queue" <> (show id) <> ".txt"
   let sm' = sm fname
@@ -162,4 +185,4 @@ prop_sequential = forAllCommands (sm "") Nothing $ \cmds -> monadicIO $ do
 main :: IO ()
 main = do
     createDirectoryIfMissing False "queues"
-    quickCheck prop_sequential
+    quickCheck state_machine_properties

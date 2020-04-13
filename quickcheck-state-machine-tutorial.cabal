@@ -61,7 +61,7 @@ test-suite quickcheck-state-machine-tutorial-test
     , quickcheck-state-machine-tutorial
     , split
     , directory
-    , random
+    , pcg-random
     , QuickCheck
     , quickcheck-state-machine
   default-language: Haskell2010
