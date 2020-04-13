@@ -1,9 +1,7 @@
-{-# LANGUAGE DataKinds          #-}
 {-# LANGUAGE DeriveAnyClass     #-}
 {-# LANGUAGE DeriveGeneric      #-}
 {-# LANGUAGE DerivingStrategies #-}
 {-# LANGUAGE FlexibleInstances  #-}
-{-# LANGUAGE GADTs              #-}
 {-# LANGUAGE PolyKinds          #-}
 {-# LANGUAGE StandaloneDeriving #-}
 
@@ -21,22 +19,12 @@ import System.IO
 import Data.List
 import Data.List.Split
 
--- data StateMachine model cmd m resp = StateMachine
---   { initModel      :: forall r. model r
---   , transition     :: forall r. (Show1 r, Ord1 r) => model r -> cmd r -> resp r -> model r
---   , precondition   :: model Symbolic -> cmd Symbolic -> Logic
---   , postcondition  :: model Concrete -> cmd Concrete -> resp Concrete -> Logic
---   , invariant      :: Maybe (model Concrete -> Logic)
---   , generator      :: model Symbolic -> Maybe (Gen (cmd Symbolic))
---   , shrinker       :: model Symbolic -> cmd Symbolic -> [cmd Symbolic]
---   , semantics      :: cmd Concrete -> m (resp Concrete)
---   , mock           :: model Symbolic -> cmd Symbolic -> GenSym (resp Symbolic)
---   , cleanup        :: model Concrete -> m ()
---   }
-
 --------------------------
 --- the model
 --- in this case, also an array
+--- for the pretty printing to work, Model Concrete needs to
+--- derive from ToExpr but not Model Symbolic
+--- to enable this, we use the StandaloneDeriving language feature
 data Model (r :: Type -> Type) = Model [Int] deriving (Show, Eq, Generic)
 deriving anyclass instance ToExpr (Model Concrete)
 
