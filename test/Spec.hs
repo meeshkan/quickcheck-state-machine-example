@@ -1,7 +1,26 @@
+{-# LANGUAGE DataKinds          #-}
+{-# LANGUAGE DeriveAnyClass     #-}
+{-# LANGUAGE DeriveGeneric      #-}
+{-# LANGUAGE DerivingStrategies #-}
+{-# LANGUAGE FlexibleInstances  #-}
+{-# LANGUAGE GADTs              #-}
+{-# LANGUAGE PolyKinds          #-}
+{-# LANGUAGE StandaloneDeriving #-}
+
 import Data.Maybe
+import System.Directory
+import System.Random
+import Data.Kind(Type)
 import Data.Functor.Classes(Eq1)
-import Test.QuickCheck(Arbitrary(arbitrary), Gen, oneof, shrink)
+import Test.QuickCheck(Arbitrary(arbitrary), Gen, oneof, shrink, quickCheck, withMaxSuccess, Property, (===))
+import Test.QuickCheck.Monadic(monadicIO, run)
+import GHC.Generics (Generic, Generic1)
 import Test.StateMachine
+import qualified Test.StateMachine.Types.Rank2 as Rank2
+import System.IO
+import Data.List
+import Data.List.Split
+
 -- data StateMachine model cmd m resp = StateMachine
 --   { initModel      :: forall r. model r
 --   , transition     :: forall r. (Show1 r, Ord1 r) => model r -> cmd r -> resp r -> model r
@@ -14,23 +33,27 @@ import Test.StateMachine
 --   , mock           :: model Symbolic -> cmd Symbolic -> GenSym (resp Symbolic)
 --   , cleanup        :: model Concrete -> m ()
 --   }
---------------------------
---- the system under test
---- in this case, an array to represent a FIFO queue
-data SUT r = SUT [r]
+
 --------------------------
 --- the model
 --- in this case, also an array
-data Model r = Model [Int]
+data Model (r :: Type -> Type) = Model [Int] deriving (Show, Eq, Generic)
+deriving anyclass instance ToExpr (Model Concrete)
+
 --------------------------
-data Command r
+data Command (r :: Type -> Type)
   = Push Int
   | Pop
   | AskLength
-data Response r
+  deriving stock (Eq, Show, Generic1)
+  deriving anyclass (Rank2.Functor, Rank2.Foldable, Rank2.Traversable, CommandNames)
+
+data Response (r :: Type -> Type)
   = Pushed
   | Popped (Maybe Int)
   | TellLength Int
+  deriving stock (Show, Generic1)
+  deriving anyclass (Rank2.Foldable)
 ------------------------------------
 -- initModel creates an initial model for all polymorphic types
 -- in this case, as the model is just a list
@@ -52,14 +75,14 @@ transition m AskLength (TellLength _) = m
 -- boolean operaters needed to form the logic type
 -- in our case, because there are no preconditions, we can start
 -- at the top every time, which is represented by `Top`
-precondition :: Model (Symbolic ()) -> Command (Symbolic ()) -> Logic
+precondition :: Model Symbolic -> Command Symbolic -> Logic
 precondition _ _ = Top
 
 -------------------------------------------------
 -- postcondition contains all of the requirements
 -- after the state has changed
 
-postcondition :: Model (Concrete ()) -> Command (Concrete ()) -> Response (Concrete ()) -> Logic
+postcondition :: Model Concrete -> Command Concrete -> Response Concrete -> Logic
 postcondition mod cmd@(Push x) resp = x .== head m'
   where Model m' = transition mod cmd resp
 postcondition (Model m) Pop (Popped x) = x .== if null m then Nothing else Just $ last m
@@ -77,7 +100,7 @@ invariant = Nothing
 -- we use the same combinators as quickcheck (oneof, etc)
 -- here, the oneof generator will pick a random action
 
-generator :: Model (Symbolic ()) -> Maybe (Gen (Command (Symbolic ())))
+generator :: Model Symbolic -> Maybe (Gen (Command Symbolic))
 generator _ = Just $ oneof [(pure Pop), (Push <$> arbitrary), (pure AskLength)]
 
 ----------------------------------------------
@@ -86,21 +109,60 @@ generator _ = Just $ oneof [(pure Pop), (Push <$> arbitrary), (pure AskLength)]
 -- number going into push
 -- everything else doesn't need shrinking
 
-shrinker :: Model (Symbolic ()) -> Command (Symbolic ()) -> [Command (Symbolic ())]
+shrinker :: Model Symbolic -> Command Symbolic -> [Command Symbolic]
 shrinker _ (Push x) = [ Push x' | x' <- shrink x ]
 shrinker _ _             = []
 
 ---------------------------------
+-- semantics is what actually happens
+-- the monadic context needs to be specified
+-- and in this case it is IO
+
+semantics :: String -> Command Concrete -> IO (Response Concrete)
+semantics fname (Push x) = do
+    fe <- doesFileExist fname
+    if (not fe) then do
+            withFile fname WriteMode $ \handle -> hPutStr handle $ show x
+            return Pushed
+        else do
+            txt <- withFile fname ReadMode $ \handle -> hGetLine handle
+            let split = splitOn ":" txt
+            withFile fname WriteMode $ \handle -> hPutStr handle $ intercalate ":" (show x : split)
+            return Pushed
+semantics fname Pop = do
+    fe <- doesFileExist fname
+    if (not fe) then return $ Popped Nothing else do
+        txt <- withFile fname ReadMode $ \handle -> hGetLine handle
+        let split = splitOn ":" txt
+        if (length split == 1) then removeFile fname else withFile fname WriteMode $ \handle -> hPutStr handle $ intercalate ":" $ init split
+        return (Popped (if null split then Nothing else Just (read (last split) :: Int)))
+semantics fname AskLength = do
+    fe <- doesFileExist fname
+    if (not fe) then return $ TellLength 0 else do
+        txt <- withFile fname ReadMode $ \handle -> hGetLine handle
+        let split = splitOn ":" txt
+        return (TellLength (length split))
+
+---------------------------------
 -- mock is the logic of the model
 
-mock :: Model (Symbolic ()) -> Command (Symbolic ()) -> GenSym (Response (Symbolic ()))
+mock :: Model Symbolic -> Command Symbolic -> GenSym (Response Symbolic)
 mock _ (Push _) = pure Pushed
 mock (Model m) Pop = pure $ Popped (if null m then Nothing else Just $ last m)
 mock (Model m) AskLength = pure $ TellLength $ length m
 
--- sm :: StateMachine Model Command IO Response
--- sm = StateMachine initModel transitios precondition postcondition
---       Nothinvarianting generator shrinker semantics mock noCleanup
+sm :: String -> StateMachine Model Command IO Response
+sm s = StateMachine initModel transition precondition postcondition
+      Nothing generator shrinker (semantics s) mock noCleanup
+
+newRand = randomIO :: IO Int
+
+prop_sequential :: Property
+prop_sequential = forAllCommands (sm "") Nothing $ \cmds -> monadicIO $ do
+  id <- run newRand
+  let sm' = sm ("queues/queue" <> (show id) <> ".txt")
+  (hist, _model, res) <- runCommands sm' cmds
+  prettyCommands sm' hist (checkCommandNames cmds (res === Ok))
 
 main :: IO ()
-main = putStrLn "Test suite not yet implemented"
+main = quickCheck prop_sequential
