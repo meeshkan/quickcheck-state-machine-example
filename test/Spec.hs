@@ -160,7 +160,8 @@ newRand = randomIO :: IO Int
 prop_sequential :: Property
 prop_sequential = forAllCommands (sm "") Nothing $ \cmds -> monadicIO $ do
   id <- run newRand
-  let sm' = sm ("queues/queue" <> (show id) <> ".txt")
+  let fname = "queues/queue" <> (show id) <> ".txt"
+  let sm' = sm fname
   (hist, _model, res) <- runCommands sm' cmds
   prettyCommands sm' hist (checkCommandNames cmds (res === Ok))
 
